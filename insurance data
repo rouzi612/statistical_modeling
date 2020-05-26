@@ -1,0 +1,418 @@
+# This case study is to answer three questions: 1) identify low-claim-cost customers, 2)predict minimum cost per claim, 3) make groups of customers based on their risk profile for marketing campaign.
+library(readxl)
+policies<- read_excel("C:/Users/rouzi.bai/Desktop/case study/auto_policies_2017.xlsx", 
+                                 sheet = "auto_policies_2017", col_types = c("numeric", 
+                                                                             "date", "text", "numeric", "date", 
+                                                                             "numeric", "text", "numeric", "numeric", 
+                                                                             "text", "numeric", "text", "numeric", 
+                                                                             "numeric", "numeric"))
+customers<- read_excel("C:/Users/rouzi.bai/Desktop/case study/auto_potential_customers_2018.xlsx", 
+                                            sheet = "auto_potential_customers_2018", 
+                                            col_types = c("numeric", "text", "numeric", 
+                                                          "date", "numeric", "text", "numeric", 
+                                                          "numeric", "text", "numeric"))
+dim(policies)
+dim(customers)
+
+# check the number of missing data in each column
+colSums(is.na(policies))
+
+##imputation for missing data
+# agecat 
+library(lubridate)
+birth_year<-year(policies$date_of_birth)
+library(stringr)
+policies$generation<-str_sub(birth_year,3,3)
+policies$agegrp<-ifelse(policies$generation==9,1,
+                        ifelse(policies$generation==8,2,
+                               ifelse(policies$generation==7,3,
+                                      ifelse(policies$generation==6,4,
+                                             ifelse(policies$generation==5,5,
+                                                    ifelse(policies$generation==4,6,
+                                                           ifelse(policies$generation==3,7,
+                                                                  ifelse(policies$generation==2,8,0))))))))
+table(policies$agegrp)
+policies$gender_dum<-ifelse(policies$gender=="F",1,0)
+# correlation matrix for num vars to test multilinaearity among features
+names(policies)
+str(policies)
+cor(na.omit(policies[,c(6,8,11,13,14,17,18)]))
+# impute missing obs of credit scrore with its mean
+summary(policies$credit_score)
+policies$credit_score<-ifelse(is.na(policies$credit_score),662.2,policies$credit_score)
+# do the same for trafic index
+summary(policies$ traffic_index)
+policies$ traffic_index<-ifelse(is.na(policies$ traffic_index),103.9,policies$ traffic_index)
+
+# 
+library(caTools)
+# creates a value for dividing the policies into train and test. 
+# In this case the value is defined as 75% of the number of rows in the dataset
+smp_siz = floor(0.75*nrow(policies)) 
+# shows the value of the sample size
+smp_siz 
+# set seed to ensure you always have same random numbers generated
+set.seed(123)   
+# Randomly identifies therows equal to sample size ( defined in previous instruction) from  all the rows of policies dataset 
+# and stores the row number in train_ind
+train_ind = sample(seq_len(nrow(policies)),size = smp_siz)
+#creates the training dataset with row numbers stored in train_ind
+train =policies[train_ind,] 
+# the complement will be the test set 
+test=policies[-train_ind,]  
+
+library(caret)
+library(lattice)
+library(ggplot2)
+# no claim = No, one or more = Yes
+train$claim_flag<-ifelse(train$numclaims==0,0,1)
+### Logistic Regression ###
+# fit a full model with all possible features
+model.full<-glm(factor(train$claim_flag)~`gender`+`agegrp`+`credit_score`+
+                  `area`+`traffic_index`+`veh_age`+`veh_value`,
+                data = train, family = binomial("logit"))
+summary(model.full)
+
+
+# examine correlation between Area and Y
+tbl1<-table(train$area,train$claim_flag)
+chisq.test(tbl1)
+library(gmodels) 
+joint<-CrossTable(train$area,train$claim_flag, chisq = FALSE)
+
+# comment: area D,F tend to have higher claim rate
+
+# examine correlation between Agegrp and Y
+tbl2<-table(factor(train$agegrp),train$claim_flag)
+chisq.test(tbl2)
+joint1<-CrossTable(factor(train$agegrp),train$claim_flag, chisq = FALSE)
+
+# making prediction 
+pred1<-predict(model.full,newdata = test)
+test$probs1 <- exp(pred1)/(1+exp(pred1))
+
+# if prob >0.5 then will have claim
+
+test$claims_pred1<-ifelse(test$probs1>0.5,1,0)
+# no claim = No, one or more = Yes
+test$claim_flag<-ifelse(test$numclaims==0,0,1)
+
+confusionMatrix(factor(test$claims_pred1),factor(test$claim_flag), positive = "1")
+library(pROC)
+roc<-roc(response =test$claim_flag,predictor=test$claims_pred1)
+auc(roc)
+
+#################### 2nd model###############
+# add significant interaction terms
+add1.test <- add1(model.full, scope = .~. + .^2, test="Chisq")
+add1.test[order(add1.test$'Pr(>Chi)'),]
+# add three interaction terms: credit_score:veh_age,gender:credit_score,agegrp:area
+model2<- glm(factor(train$claim_flag)~`gender`+`agegrp`+`credit_score`+
+               `area`+`traffic_index`+`veh_age`+`veh_value`+ `credit_score`*`veh_age`+
+               `gender`*`credit_score` + `agegrp`*`area`,
+             data = train, family = binomial("logit"))
+summary(model2)
+
+
+
+model3<- glm(factor(train$claim_flag)~`gender`+`agegrp`+`credit_score`+
+               `area`+`traffic_index`+`veh_age`+`veh_value`+ `credit_score`*`veh_age`+
+               `gender`*`credit_score`,
+             data = train, family = binomial("logit"))
+summary(model3)
+
+
+###making prediction 
+pred2<-predict(model2,newdata = test)
+test$probs2 <- exp(pred2)/(1+exp(pred2))
+
+# if prob >0.5 then will have claim
+
+test$claims_pred2<-ifelse(test$probs2>0.5,1,0)
+confusionMatrix(factor(test$claims_pred2),factor(test$claim_flag), positive = "1")
+
+
+pred3<-predict(model3,newdata = test)
+test$probs3 <- exp(pred3)/(1+exp(pred3))
+
+# if prob >0.5 then will have claim
+
+test$claims_pred3<-ifelse(test$probs3>0.5,1,0)
+confusionMatrix(factor(test$claims_pred3),factor(test$claim_flag), positive = "1")
+
+# calibration plot to compare models
+library(PresenceAbsence)
+calCurve<-calibration(factor(test$claim_flag)~test$probs1+test$probs2+test$probs3, data = test,class = "1")
+xyplot(calCurve,auto.key = list(columns = 2))
+
+
+
+
+############### use random forest to predict  low claim customers 
+library(randomForest)
+str(train)
+train$area<-as.factor(train$area)
+rm1<-randomForest(factor(train$claim_flag)~`gender_dum`+`agegrp`+`credit_score`+
+                    `area`+`traffic_index`+`veh_age`+`veh_value`,
+                  data = train)
+
+
+str(test)
+test$area<-as.factor(test$area)
+rf.pred<-predict(rm1,newdata=test, type = "prob")
+test$rf.pred<-rf.pred[,"1"]
+test$claims_pred3<-ifelse(test$rf.pred>0.5,1,0)
+confusionMatrix(factor(test$claims_pred3),factor(test$claim_flag), positive = "1")
+varImp(rm1)
+varImp(model.full)
+
+# rf model2
+rm2<-randomForest(factor(train$claim_flag)~`gender_dum`+`agegrp`+`credit_score`+
+  `area`+`traffic_index`+`veh_age`+`veh_value`+ `credit_score`*`veh_age`+
+  `gender_dum`*`credit_score`, data = train)
+
+rf.pred2<-predict(rm2,newdata=test, type = "prob")
+test$rf.pred2<-rf.pred2[,"1"]
+test$claims_pred4<-ifelse(test$rf.pred2>0.5,1,0)
+confusionMatrix(factor(test$claims_pred4),factor(test$claim_flag), positive = "1")
+
+varImp(rm2)
+calCurve<-calibration(factor(test$claim_flag)~test$probs1+test$probs2+test$probs3+test$rf.pred2, data = test,class = "1")
+xyplot(calCurve,auto.key = list(columns = 2))
+
+model.names<-c(model1,model3,rm2)
+model.accur<-c(0.8567,0.8567,0.8585 )
+###############################################################################################
+###############################################################################################
+########## linear regression with lasso regression to predict claim cost ######################
+
+claimcost<-policies[policies$claimcst0!=0,]
+claimcost$generation<-str_sub(birth_year,3,3)
+claimcost$agegrp<-ifelse(claimcost$generation==9,1,
+                        ifelse(claimcost$generation==8,2,
+                               ifelse(claimcost$generation==7,3,
+                                      ifelse(claimcost$generation==6,4,
+                                             ifelse(claimcost$generation==5,5,
+                                                    ifelse(claimcost$generation==4,6,
+                                                           ifelse(claimcost$generation==3,7,
+                                                                  ifelse(claimcost$generation==2,8,0))))))))
+
+# add centered vars for adding interactions 
+claimcost$credit_score.c<-claimcost$credit_score-mean(claimcost$credit_score)
+claimcost$veh_age.c<-claimcost$veh_age-mean(claimcost$veh_age)
+claimcost$veh_value.c<-claimcost$veh_value-mean(claimcost$veh_value)
+claimcost$traffic_index.c<-claimcost$traffic_index-mean(claimcost$traffic_index)
+
+# train test split
+smp_siz = floor(0.75*nrow(claimcost)) 
+set.seed(123)   
+train_ind = sample(seq_len(nrow(claimcost)),size = smp_siz)
+train =claimcost[train_ind,] 
+test=claimcost[-train_ind,]  
+
+str(train)
+dim(train)
+dim(test)
+# check missing values
+colSums(is.na(claimcost))
+
+# correlation test
+cor(na.omit(claimcost[,c(6,8,9,11,14,17,18)]))
+# credit_score traffic_index      veh_age     veh_value 
+
+lm1<-lm(train$claimcst0 ~`credit_score`+`traffic_index`+`veh_age`+
+          `veh_value`+`gender`+`agegrp`+`area`, data = train)
+summary(lm1)
+# root mean squared error calculation
+RMSE <- function(error) { sqrt(mean(error^2)) }
+RMSE1<-RMSE(lm1$residuals)
+add1.test <- add1(lm1, scope = .~. + .^2, test="Chisq")
+add1.test[order(add1.test$'Pr(>Chi)'),]
+
+
+
+# model 2
+
+lm2<- lm(train$claimcst0 ~`credit_score.c`*`veh_age.c`+
+           `credit_score.c`*`veh_value.c`+`veh_age.c`*`area`+ `credit_score.c`*`area`+
+           `agegrp`*`area` + `gender`*`agegrp`+`veh_value.c`*`area`+`traffic_index.c`*`veh_age.c`+
+           `credit_score.c`*`agegrp` + `credit_score.c`*`traffic_index.c`+`veh_age.c`*`agegrp` +
+           `traffic_index.c`*`area`+`credit_score.c`*`gender`, data = train)
+
+summary(lm2)
+test$pred<-predict(lm2, newdata = test)
+sum(test$claimcst0-test$pred)
+plot(resid(lm2))
+RMSE2<-RMSE(lm2$residuals)
+
+# Function for Mean Absolute Error
+mae <- function(error) { mean(abs(error)) }
+mae(fit$residuals)
+
+
+#### LASSO  Regression
+library(glmnet)
+# feature matrix
+x <- as.matrix(train[,c(6,8,9,11,17,18)])
+head(x)
+y <- train$claimcst0
+#find the best lambda from our list via cross-validation
+cv.out <- cv.glmnet(x, y, alpha = 0)
+bestlam <- cv.out$lambda.min
+
+lasso.mod <- glmnet(x, y=y, alpha = 1, family="gaussian")
+newx<-data.matrix(test[,c(6,8,9,11,17,18)])
+lasso.pred <- predict(lasso.mod, s = bestlam, newx  = newx)
+ytest<-test$claimcst0
+#RMSE for lasso model
+RMSE3<-sqrt(mean((lasso.pred-ytest)^2))
+
+RMSE1 
+RMSE2
+RMSE3
+#conclusion:  mdoel 2 gives me the lowest RMSE, so i'd like to implement model 2
+
+
+#############################################################################################
+########################## KNN ##############################################################
+# divide the current customers into 3 groups based on their number of claims occured 
+# 0,1-> low, 2,3-> medium, 4,5-> high
+policies$risk_grp<-ifelse(policies$numclaims<=1, "low",
+                          ifelse(policies$numclaims<=3 & policies$numclaims>1,"medium",
+                                 ifelse(policies$numclaims>=4,"high","NA")))
+# normalize the data
+# the normalization function is created
+nor <-function(x) { (x -min(x))/(max(x)-min(x))   }
+
+##Run nomalization on the predictors
+policies_norm <- as.data.frame(lapply(policies[,c(6,8,9,11,17)], nor))
+
+policies_norm$gender<-policies$gender_dum
+policies_norm$risk_grp<-policies$risk_grp
+head(policies_norm)
+# check
+summary(policies_norm)
+# split the data
+set.seed(123)  
+ran <- sample(1:nrow(policies_norm),size=nrow(policies_norm)*0.75,replace = FALSE)
+# set seed to ensure you always have same random numbers generated
+ 
+##extract training set
+train <- policies_norm[ran,] 
+##extract testing set
+test <- policies_norm[-ran,] 
+train.risk.grp<- train[,"risk_grp"]
+test.risk.grp <- test[,"risk_grp"]
+
+##load the package class
+library(class)
+##run knn function
+pr <- knn(train[,c(1:6)],test[,c(1:6)],cl=train.risk.grp, k=5)
+
+##create confusion matrix
+tab <- table(pr,test.risk.grp)
+
+##this function divides the correct predictions by total number of predictions that tell us how accurate teh model is.
+
+accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+accuracy(tab)
+##
+i=1                          # declaration to initiate for loop
+k.optm=1                     # declaration to initiate for loop
+for (i in 1:28){ 
+  knn.mod <-  knn(train=train[,c(1:6)], test=test[,c(1:6)], cl=train.risk.grp, k=i)
+  k.optm[i] <- 100 * sum(test.risk.grp == knn.mod)/NROW(test.risk.grp)
+  k=i  
+  cat(k,'=',k.optm[i],'\n')       # to print % accuracy 
+}
+
+plot(k.optm, type="b", xlab="K- Value",ylab="Accuracy level")
+# At k=13, maximum accuracy achieved which is 96.73467 %, 
+# after that, it seems increasing K increases the classification but reduces success rate. 
+# It is worse to class a customer as low risk when it is high risk than it is to class a customer as high risk when it is low risk.
+# In conclustion, i will pick k = 5 
+
+####################################################################################################################
+##### testing models on 2018 customers dataset
+# like logistic regression due to its simplicity and ability to make inferential statements about model terms.
+# interpretation of the coefficients 
+names(customers)
+library(lubridate)
+birth_year<-year(customers$date_of_birth)
+library(stringr)
+customers$generation<-str_sub(birth_year,3,3)
+customers$agegrp<-ifelse(customers$generation==9,1,
+                        ifelse(customers$generation==8,2,
+                               ifelse(customers$generation==7,3,
+                                      ifelse(customers$generation==6,4,
+                                             ifelse(customers$generation==5,5,
+                                                    ifelse(customers$generation==4,6,
+                                                           ifelse(customers$generation==3,7,
+                                                                  ifelse(customers$generation==2,8,0))))))))
+table(customers$agegrp)
+customers$gender_dum<-ifelse(customers$gender=="F",1,0)
+# correlation matrix for num vars to test multilinaearity among features
+names(customers)
+str(customers)
+
+# impute missing obs of credit scrore with its mean
+summary(customers$credit_score)
+customers$credit_score<-ifelse(is.na(customers$credit_score),661.3,customers$credit_score)
+# do the same for trafic index
+summary(customers$ traffic_index)
+customers$ traffic_index<-ifelse(is.na(customers$ traffic_index),104.4,customers$ traffic_index)
+
+# 
+model3<- glm(factor(train$claim_flag)~`gender`+`agegrp`+`credit_score`+
+               `area`+`traffic_index`+`veh_age`+`veh_value`+ `credit_score`*`veh_age`+
+               `gender`*`credit_score`,
+             data = train, family = binomial("logit"))
+summary(model3)
+
+colSums(is.na(customers))
+pred<-predict(model3,newdata = customers)
+customers$probs<- exp(pred)/(1+exp(pred))
+
+customers$low_claim<-ifelse(customers$probs>0.5,"No","Yes")
+write.csv(customers,file = "customer.csv")
+##########################################################
+# Given that a claim ocurs, prediction on the claim cost
+
+low_claim_customer<- read_excel("C:/Users/rouzi.bai/Desktop/case study/low_claim_customer_prediction.xlsx", 
+                                            sheet = "customer", col_types = c("numeric", 
+                                                                              "text", "text", "date", "numeric", 
+                                                                              "text", "numeric", "numeric", "text", 
+                                                                              "numeric", "numeric", "numeric", 
+                                                                              "numeric", "numeric", "text"))
+
+claim.yes<-low_claim_customer[low_claim_customer$low_claim=="No",]
+dim(claim.yes)
+
+# add centered vars for adding interactions 
+claim.yes$credit_score.c<-claim.yes$credit_score-mean(claim.yes$credit_score)
+claim.yes$veh_age.c<-claim.yes$veh_age-mean(claim.yes$veh_age)
+claim.yes$veh_value.c<-claim.yes$veh_value-mean(claim.yes$veh_value)
+claim.yes$traffic_index.c<-claim.yes$traffic_index-mean(claim.yes$traffic_index)
+
+lm2<- lm(train$claimcst0 ~`credit_score.c`*`veh_age.c`+
+           `credit_score.c`*`veh_value.c`+`veh_age.c`*`area`+ `credit_score.c`*`area`+
+           `agegrp`*`area` + `gender`*`agegrp`+`veh_value.c`*`area`+`traffic_index.c`*`veh_age.c`+
+           `credit_score.c`*`agegrp` + `credit_score.c`*`traffic_index.c`+`veh_age.c`*`agegrp` +
+           `traffic_index.c`*`area`+`credit_score.c`*`gender`, data = train)
+
+summary(lm2)
+claim.yes$pred<-predict(lm2, newdata = claim.yes)
+mean(claim.yes$pred)
+write.csv(claim.yes, file = "claimcost.csv")
+####### KNN grouping
+dim(customers)
+names(customers)
+customers_norm <- as.data.frame(lapply(customers[,c(5,7,8,10,12,13)], nor))
+head(customers_norm)
+predict.grp<- knn(train[,c(1:6)],customers_norm,cl=train.risk.grp, k=5)
+unique(predict.grp)
+customers$risk.group<-predict.grp
+write.csv(customers, file = "customers with risk grp.csv")
+
+
+          
